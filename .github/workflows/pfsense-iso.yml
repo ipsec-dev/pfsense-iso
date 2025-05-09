@@ -33,10 +33,10 @@ jobs:
         run: |
           gunzip "${{ env.LATEST_FILE }}"
 
-      - name: Rewrite SHA256 file with proper format
+      - name: Rewrite SHA256 file in desired format
         run: |
-          HASH=$(cut -d ' ' -f1 "${{ env.LATEST_FILE }}.sha256")
-          echo "$HASH *${{ env.ISO_FILE }}" > "${{ env.SHA_FILE }}"
+          HASH=$(cut -d '=' -f2 "${{ env.LATEST_FILE }}.sha256" | tr -d ' ')
+          echo "$HASH ${{ env.ISO_FILE }}" > "${{ env.SHA_FILE }}"
 
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v1
