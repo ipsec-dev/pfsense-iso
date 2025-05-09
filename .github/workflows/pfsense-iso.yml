@@ -11,10 +11,12 @@ jobs:
         run: |
           URL="https://atxfiles.netgate.com/mirror/downloads"
           FILE=$(curl -s "$URL/" | grep -oP 'pfSense-CE-\d+\.\d+\.\d+-RELEASE-amd64\.iso\.gz' | sort -V | tail -n1)
-          echo "LATEST_FILE=$FILE" >> $GITHUB_ENV
           VERSION=$(echo "$FILE" | sed 's/.iso.gz//' )
+          ISO_FILE="${FILE%.gz}"
+          echo "URL=$URL" >> $GITHUB_ENV
+          echo "LATEST_FILE=$FILE" >> $GITHUB_ENV
           echo "RELEASE_VERSION=$VERSION" >> $GITHUB_ENV
-          echo "Download target: $FILE"
+          echo "ISO_FILE=$ISO_FILE" >> $GITHUB_ENV
 
       - name: Download ISO and checksum
         run: |
@@ -28,7 +30,6 @@ jobs:
       - name: Unzip ISO
         run: |
           gunzip "${{ env.LATEST_FILE }}"
-          echo "ISO_FILE=${{ env.LATEST_FILE%.gz }}" >> $GITHUB_ENV
 
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v1
