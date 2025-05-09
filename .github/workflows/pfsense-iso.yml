@@ -1,0 +1,40 @@
+name: Publish pfSense ISO
+
+on:
+  workflow_dispatch:
+
+jobs:
+  download-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up variables and find latest ISO
+        run: |
+          URL="https://atxfiles.netgate.com/mirror/downloads"
+          FILE=$(curl -s "$URL/" | grep -oP 'pfSense-CE-\d+\.\d+\.\d+-RELEASE-amd64\.iso\.gz' | sort -V | tail -n1)
+          echo "LATEST_FILE=$FILE" >> $GITHUB_ENV
+          VERSION=$(echo "$FILE" | sed 's/.iso.gz//' )
+          echo "RELEASE_VERSION=$VERSION" >> $GITHUB_ENV
+          echo "Download target: $FILE"
+
+      - name: Download ISO and checksum
+        run: |
+          curl -LO "$URL/${{ env.LATEST_FILE }}"
+          curl -LO "$URL/${{ env.LATEST_FILE }}.sha256"
+
+      - name: Verify SHA256 checksum
+        run: |
+          sha256sum -c "${{ env.LATEST_FILE }}.sha256"
+
+      - name: Unzip ISO
+        run: |
+          gunzip "${{ env.LATEST_FILE }}"
+          echo "ISO_FILE=${{ env.LATEST_FILE%.gz }}" >> $GITHUB_ENV
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: ${{ env.RELEASE_VERSION }}
+          tag_name: ${{ env.RELEASE_VERSION }}
+          files: ${{ env.ISO_FILE }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
