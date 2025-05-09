@@ -17,15 +17,16 @@ jobs:
           echo "LATEST_FILE=$FILE" >> $GITHUB_ENV
           echo "RELEASE_VERSION=$VERSION" >> $GITHUB_ENV
           echo "ISO_FILE=$ISO_FILE" >> $GITHUB_ENV
+          echo "SHA_FILE=$FILE.sha256" >> $GITHUB_ENV
 
       - name: Download ISO and checksum
         run: |
           curl -LO "$URL/${{ env.LATEST_FILE }}"
-          curl -LO "$URL/${{ env.LATEST_FILE }}.sha256"
+          curl -LO "$URL/${{ env.SHA_FILE }}"
 
       - name: Verify SHA256 checksum
         run: |
-          sha256sum -c "${{ env.LATEST_FILE }}.sha256"
+          sha256sum -c "${{ env.SHA_FILE }}"
 
       - name: Unzip ISO
         run: |
@@ -36,6 +37,8 @@ jobs:
         with:
           name: ${{ env.RELEASE_VERSION }}
           tag_name: ${{ env.RELEASE_VERSION }}
-          files: ${{ env.ISO_FILE }}
+          files: |
+            ${{ env.ISO_FILE }}
+            ${{ env.SHA_FILE }}
         env:
           GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
