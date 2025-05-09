@@ -13,24 +13,30 @@ jobs:
           FILE=$(curl -s "$URL/" | grep -oP 'pfSense-CE-\d+\.\d+\.\d+-RELEASE-amd64\.iso\.gz' | sort -V | tail -n1)
           VERSION=$(echo "$FILE" | sed 's/.iso.gz//' )
           ISO_FILE="${FILE%.gz}"
+          SHA_FILE="${ISO_FILE}.sha256"
           echo "URL=$URL" >> $GITHUB_ENV
           echo "LATEST_FILE=$FILE" >> $GITHUB_ENV
           echo "RELEASE_VERSION=$VERSION" >> $GITHUB_ENV
           echo "ISO_FILE=$ISO_FILE" >> $GITHUB_ENV
-          echo "SHA_FILE=$FILE.sha256" >> $GITHUB_ENV
+          echo "SHA_FILE=$SHA_FILE" >> $GITHUB_ENV
 
-      - name: Download ISO and checksum
+      - name: Download ISO and raw checksum
         run: |
           curl -LO "$URL/${{ env.LATEST_FILE }}"
-          curl -LO "$URL/${{ env.SHA_FILE }}"
+          curl -LO "$URL/${{ env.LATEST_FILE }}.sha256"
 
-      - name: Verify SHA256 checksum
+      - name: Verify original SHA256
         run: |
-          sha256sum -c "${{ env.SHA_FILE }}"
+          sha256sum -c "${{ env.LATEST_FILE }}.sha256"
 
       - name: Unzip ISO
         run: |
           gunzip "${{ env.LATEST_FILE }}"
+
+      - name: Rewrite SHA256 file with proper format
+        run: |
+          HASH=$(cut -d ' ' -f1 "${{ env.LATEST_FILE }}.sha256")
+          echo "$HASH *${{ env.ISO_FILE }}" > "${{ env.SHA_FILE }}"
 
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v1
