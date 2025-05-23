@@ -2,49 +2,213 @@ name: Publish pfSense ISO
 
 on:
   workflow_dispatch:
+  schedule:
+    # Check for new releases daily at 2 AM UTC
+    - cron: '0 2 * * *'
+
+env:
+  PFSENSE_BASE_URL: https://atxfiles.netgate.com/mirror/downloads
 
 jobs:
   download-and-release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
     steps:
-      - name: Set up variables and find latest ISO
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Discover latest pfSense version
+        id: discover
         run: |
-          URL="https://atxfiles.netgate.com/mirror/downloads"
-          FILE=$(curl -s "$URL/" | grep -oP 'pfSense-CE-\d+\.\d+\.\d+-RELEASE-amd64\.iso\.gz' | sort -V | tail -n1)
-          VERSION=$(echo "$FILE" | sed 's/.iso.gz//' )
-          ISO_FILE="${FILE%.gz}"
+          set -euo pipefail
+          
+          echo "🔍 Discovering latest pfSense version..."
+          
+          # Fetch and parse latest version
+          LATEST_FILE=$(curl -fsSL "$PFSENSE_BASE_URL/" | \
+            grep -oP 'pfSense-CE-\d+\.\d+\.\d+-RELEASE-amd64\.iso\.gz' | \
+            sort -V | tail -n1)
+          
+          if [[ -z "$LATEST_FILE" ]]; then
+            echo "❌ Failed to find pfSense ISO file"
+            exit 1
+          fi
+          
+          VERSION=$(echo "$LATEST_FILE" | sed 's/pfSense-CE-\(.*\)-RELEASE-amd64\.iso\.gz/\1/')
+          ISO_FILE="${LATEST_FILE%.gz}"
           SHA_FILE="${ISO_FILE}.sha256"
-          echo "URL=$URL" >> $GITHUB_ENV
-          echo "LATEST_FILE=$FILE" >> $GITHUB_ENV
-          echo "RELEASE_VERSION=$VERSION" >> $GITHUB_ENV
-          echo "ISO_FILE=$ISO_FILE" >> $GITHUB_ENV
-          echo "SHA_FILE=$SHA_FILE" >> $GITHUB_ENV
+          
+          echo "📦 Found version: $VERSION"
+          echo "📁 ISO file: $ISO_FILE"
+          
+          # Export variables
+          {
+            echo "latest_file=$LATEST_FILE"
+            echo "version=$VERSION"
+            echo "iso_file=$ISO_FILE" 
+            echo "sha_file=$SHA_FILE"
+            echo "download_url=$PFSENSE_BASE_URL/$LATEST_FILE"
+            echo "checksum_url=$PFSENSE_BASE_URL/$LATEST_FILE.sha256"
+          } >> "$GITHUB_OUTPUT"
 
-      - name: Download ISO and raw checksum
+      - name: Check if release already exists
+        id: check_release
         run: |
-          curl -LO "$URL/${{ env.LATEST_FILE }}"
-          curl -LO "$URL/${{ env.LATEST_FILE }}.sha256"
-
-      - name: Verify original SHA256
-        run: |
-          sha256sum -c "${{ env.LATEST_FILE }}.sha256"
-
-      - name: Unzip ISO
-        run: |
-          gunzip "${{ env.LATEST_FILE }}"
-
-      - name: Create SHA256 for the extracted ISO
-        run: |
-          HASH=$(sha256sum "${{ env.ISO_FILE }}" | cut -d ' ' -f1)
-          echo "$HASH ${{ env.ISO_FILE }}" > "${{ env.SHA_FILE }}"
-
-      - name: Upload to GitHub Release
-        uses: softprops/action-gh-release@v1
-        with:
-          name: ${{ env.RELEASE_VERSION }}
-          tag_name: ${{ env.RELEASE_VERSION }}
-          files: |
-            ${{ env.ISO_FILE }}
-            ${{ env.SHA_FILE }}
+          set +e  # Don't exit on error for this check
+          
+          echo "🔍 Checking if release ${{ steps.discover.outputs.version }} already exists..."
+          
+          gh release view "${{ steps.discover.outputs.version }}" >/dev/null 2>&1
+          EXISTS=$?
+          
+          if [[ $EXISTS -eq 0 ]]; then
+            echo "✅ Release already exists, skipping..."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "🆕 New release detected, proceeding..."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
         env:
-          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download pfSense files
+        if: steps.check_release.outputs.skip == 'false'
+        run: |
+          set -euo pipefail
+          
+          echo "⬇️ Downloading pfSense ${{ steps.discover.outputs.version }}..."
+          
+          # Download with progress and retry logic
+          download_with_retry() {
+            local url="$1"
+            local max_attempts=3
+            local attempt=1
+            
+            while [[ $attempt -le $max_attempts ]]; do
+              echo "📥 Attempt $attempt/$max_attempts: $(basename "$url")"
+              if curl -fsSL --progress-bar --retry 3 --retry-delay 5 -o "$(basename "$url")" "$url"; then
+                return 0
+              fi
+              ((attempt++))
+              sleep 10
+            done
+            
+            echo "❌ Failed to download $url after $max_attempts attempts"
+            return 1
+          }
+          
+          download_with_retry "${{ steps.discover.outputs.download_url }}"
+          download_with_retry "${{ steps.discover.outputs.checksum_url }}"
+
+      - name: Verify integrity
+        if: steps.check_release.outputs.skip == 'false'
+        run: |
+          set -euo pipefail
+          
+          echo "🔐 Verifying file integrity..."
+          
+          # Verify the compressed file first
+          if sha256sum -c "${{ steps.discover.outputs.latest_file }}.sha256"; then
+            echo "✅ Compressed file integrity verified"
+          else
+            echo "❌ Compressed file integrity check failed"
+            exit 1
+          fi
+
+      - name: Extract ISO
+        if: steps.check_release.outputs.skip == 'false'
+        run: |
+          set -euo pipefail
+          
+          echo "📦 Extracting ISO file..."
+          
+          # Extract with progress
+          gunzip -v "${{ steps.discover.outputs.latest_file }}"
+          
+          # Verify extraction
+          if [[ -f "${{ steps.discover.outputs.iso_file }}" ]]; then
+            ISO_SIZE=$(du -h "${{ steps.discover.outputs.iso_file }}" | cut -f1)
+            echo "✅ Extraction complete - ISO size: $ISO_SIZE"
+          else
+            echo "❌ ISO extraction failed"
+            exit 1
+          fi
+
+      - name: Generate checksums
+        if: steps.check_release.outputs.skip == 'false'
+        run: |
+          set -euo pipefail
+          
+          echo "🔒 Generating checksums for extracted ISO..."
+          
+          # Generate multiple checksums for verification
+          sha256sum "${{ steps.discover.outputs.iso_file }}" > "${{ steps.discover.outputs.sha_file }}"
+          md5sum "${{ steps.discover.outputs.iso_file }}" > "${{ steps.discover.outputs.iso_file }}.md5"
+          
+          # Display checksums
+          echo "📋 Generated checksums:"
+          echo "SHA256: $(cat "${{ steps.discover.outputs.sha_file }}")"
+          echo "MD5: $(cat "${{ steps.discover.outputs.iso_file }}.md5")"
+
+      - name: Create GitHub Release
+        if: steps.check_release.outputs.skip == 'false'
+        run: |
+          set -euo pipefail
+          
+          echo "🚀 Creating GitHub release..."
+          
+          # Create release with detailed body
+          RELEASE_BODY="## pfSense Community Edition ${{ steps.discover.outputs.version }}
+
+          This is an automated release of pfSense CE ${{ steps.discover.outputs.version }}.
+
+          ### Files included:
+          - 🎯 **${{ steps.discover.outputs.iso_file }}** - Main ISO image
+          - 🔒 **${{ steps.discover.outputs.sha_file }}** - SHA256 checksum
+          - 🔒 **${{ steps.discover.outputs.iso_file }}.md5** - MD5 checksum
+
+          ### Verification:
+          \`\`\`bash
+          # Verify SHA256
+          sha256sum -c ${{ steps.discover.outputs.sha_file }}
+
+          # Verify MD5
+          md5sum -c ${{ steps.discover.outputs.iso_file }}.md5
+          \`\`\`
+
+          ### Source:
+          Downloaded from: [Netgate Official Mirror](${{ env.PFSENSE_BASE_URL }})
+
+          ---
+          *Automated release created on $(date -u '+%Y-%m-%d %H:%M:%S UTC')*"
+
+          gh release create "${{ steps.discover.outputs.version }}" \
+            --title "pfSense CE ${{ steps.discover.outputs.version }}" \
+            --notes "$RELEASE_BODY" \
+            "${{ steps.discover.outputs.iso_file }}" \
+            "${{ steps.discover.outputs.sha_file }}" \
+            "${{ steps.discover.outputs.iso_file }}.md5"
+          
+          echo "✅ Release created successfully!"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Clean up artifacts
+        if: always()
+        run: |
+          echo "🧹 Cleaning up downloaded files..."
+          rm -f *.iso *.gz *.sha256 *.md5 || true
+          echo "✅ Cleanup complete"
+
+      - name: Release summary
+        if: steps.check_release.outputs.skip == 'false'
+        run: |
+          echo "## 🎉 pfSense Release Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** ${{ steps.discover.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**ISO File:** ${{ steps.discover.outputs.iso_file }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Release URL:** ${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ steps.discover.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Release created successfully!" >> $GITHUB_STEP_SUMMARY
