@@ -3,8 +3,7 @@ name: Publish pfSense ISO
 on:
   workflow_dispatch:
   schedule:
-    # Check for new releases daily at 2 AM UTC
-    - cron: '0 2 * * *'
+    - cron: '0 2 * * 1'
 
 env:
   PFSENSE_BASE_URL: https://atxfiles.netgate.com/mirror/downloads
