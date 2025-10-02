@@ -3,7 +3,7 @@ name: Publish pfSense ISO
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 2 * * 1'
+    - cron: '0 2 1 * *'
 
 env:
   PFSENSE_BASE_URL: https://atxfiles.netgate.com/mirror/downloads
@@ -140,16 +140,14 @@ jobs:
         run: |
           set -euo pipefail
           
-          echo "🔒 Generating checksums for extracted ISO..."
+          echo "🔒 Generating checksum for extracted ISO..."
           
-          # Generate multiple checksums for verification
+          # Generate SHA256 checksum for verification
           sha256sum "${{ steps.discover.outputs.iso_file }}" > "${{ steps.discover.outputs.sha_file }}"
-          md5sum "${{ steps.discover.outputs.iso_file }}" > "${{ steps.discover.outputs.iso_file }}.md5"
           
-          # Display checksums
-          echo "📋 Generated checksums:"
+          # Display checksum
+          echo "📋 Generated checksum:"
           echo "SHA256: $(cat "${{ steps.discover.outputs.sha_file }}")"
-          echo "MD5: $(cat "${{ steps.discover.outputs.iso_file }}.md5")"
 
       - name: Create GitHub Release
         if: steps.check_release.outputs.skip == 'false'
@@ -166,15 +164,11 @@ jobs:
           ### Files included:
           - 🎯 **${{ steps.discover.outputs.iso_file }}** - Main ISO image
           - 🔒 **${{ steps.discover.outputs.sha_file }}** - SHA256 checksum
-          - 🔒 **${{ steps.discover.outputs.iso_file }}.md5** - MD5 checksum
 
           ### Verification:
           \`\`\`bash
           # Verify SHA256
           sha256sum -c ${{ steps.discover.outputs.sha_file }}
-
-          # Verify MD5
-          md5sum -c ${{ steps.discover.outputs.iso_file }}.md5
           \`\`\`
 
           ### Source:
@@ -187,8 +181,7 @@ jobs:
             --title "pfSense CE ${{ steps.discover.outputs.version }}" \
             --notes "$RELEASE_BODY" \
             "${{ steps.discover.outputs.iso_file }}" \
-            "${{ steps.discover.outputs.sha_file }}" \
-            "${{ steps.discover.outputs.iso_file }}.md5"
+            "${{ steps.discover.outputs.sha_file }}"
           
           echo "✅ Release created successfully!"
         env:
@@ -198,7 +191,7 @@ jobs:
         if: always()
         run: |
           echo "🧹 Cleaning up downloaded files..."
-          rm -f *.iso *.gz *.sha256 *.md5 || true
+          rm -f *.iso *.gz *.sha256 || true
           echo "✅ Cleanup complete"
 
       - name: Release summary
